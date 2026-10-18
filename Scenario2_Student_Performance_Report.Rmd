@@ -1,0 +1,155 @@
+---
+title: "Understanding Student Performance"
+subtitle: "Final Project Scenario 2: analytical report"
+output:
+  pdf_document:
+    latex_engine: xelatex
+    number_sections: false
+classoption: a4paper
+geometry: margin=2.1cm
+fontsize: 10pt
+header-includes:
+  - \usepackage{float}
+  - \floatplacement{figure}{H}
+  - \floatplacement{table}{H}
+  - \usepackage{booktabs}
+  - \setlength{\parskip}{4pt}
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, message = FALSE, warning = FALSE, fig.align = "center", out.width = "100%")
+library(dplyr); library(broom); library(knitr)
+options(digits = 4)
+options(knitr.table.format = "latex")
+s <- read.csv2("student-mat.csv", stringsAsFactors = FALSE)
+fv <- c("school","sex","address","famsize","Pstatus","Mjob","Fjob","reason","guardian","schoolsup","famsup","paid","activities","nursery","higher","internet","romantic")
+s[fv] <- lapply(s[fv], factor)
+s$pass <- factor(ifelse(s$G3 >= 10, "Pass", "Fail"), levels = c("Fail", "Pass"))
+f <- G3 ~ failures + Medu + goout + studytime + sex + higher + schoolsup
+linear_model   <- lm(f, data = s)
+linear_no_zero <- lm(f, data = filter(s, G3 > 0))
+logistic_model <- glm(update(f, pass ~ .), data = s, family = binomial)
+lab <- c(`(Intercept)` = "Intercept", failures = "Previous failures (each)", Medu = "Mother's education (+1 level)",
+         goout = "Going out (+1 level)", studytime = "Study time (+1 level)", sexM = "Sex: male (vs female)",
+         higheryes = "Wants higher education (vs no)", schoolsupyes = "School support (vs none)")
+pv <- function(p) ifelse(p < 0.001, "< 0.001", sprintf("%.3f", p))
+```
+
+**Research question.** Which student characteristics are associated with final Mathematics performance, which factors are linked to the risk of failing, and what conclusions can reasonably be drawn from the data?
+
+**Short answer.** A history of failing classes is the clearest warning sign: each previous failure goes with a final grade about 1.8 points lower and with much lower odds of passing. Going out very often is also linked to lower results, and a more educated mother and being male to slightly higher ones. Together these characteristics explain under a fifth of the variation in grades, and the data cannot show that any of them causes the result.
+
+# 1. Introduction and data
+
+The data come from two Portuguese secondary schools (UCI Student Performance, Mathematics course). Each of the 395 rows is one student, with 33 variables: demographic and family background, school-related and lifestyle information collected by questionnaire, and three period grades. The main outcome is the final grade `G3` (0 to 20). The second outcome, `pass`, is derived from it (G3 of 10 or more). As the brief requires, the earlier grades `G1` and `G2` are not used as predictors.
+
+**Types of variable.** Age, absences and the grades are numerical. Seventeen variables are categories (for example sex, school, `higher`, `schoolsup`) and were converted to factors. Several others are *ordered categories stored as numbers*: study time (1 to 4), going out (1 to 5), parents' education (0 to 4), and previous failures (0 to 3, where 3 means three or more). I use them as numbers in the models, which assumes equal steps between levels; that is an approximation.
+
+**Data quality.** There are no missing values and no duplicated rows. One issue is not visible in a summary table: **38 students (9.6%) have a final grade of exactly 0, and no student has a grade of 1, 2 or 3.** All 38 have zero recorded absences, and 25 of them had a positive grade in the second period. A zero therefore looks like "no final result" (for example, the exam was not taken) and not like a measured performance. I keep these students, because the outcomes are defined on all 395 rows, and I check in Section 5 how far the results depend on them. A few absence counts are also extreme (up to 75).
+
+**Responsible use.** The file holds personal and family information about minors: parents' education and jobs, alcohol use, relationships. Even without names, small groups could be identifiable within a school. Results should be reported in aggregate and must not be used to label individual students or families.
+
+# 2. Exploratory analysis
+
+```{r desc}
+desc <- function(x) c(Mean = mean(x), Median = median(x), SD = sd(x), Min = min(x), Q1 = unname(quantile(x, .25)), Q3 = unname(quantile(x, .75)), Max = max(x))
+tab <- t(sapply(s[c("G3", "age", "absences", "failures", "studytime", "goout", "Medu")], desc))
+rownames(tab) <- c("Final grade (G3)", "Age", "Absences", "Previous failures", "Study time (1-4)", "Going out (1-5)", "Mother's education (0-4)")
+kable(tab, digits = 2, booktabs = TRUE, caption = "Descriptive statistics for the outcome and selected numerical or ordered variables (n = 395)")
+```
+
+```{r figs12, fig.cap="Left: distribution of the final grade, with the zero grades highlighted. Right: final grade by number of previous class failures.", fig.show="hold", out.width="49%"}
+include_graphics(c("figures/fig1_g3_hist.png", "figures/fig2_g3_by_failures.png"))
+```
+
+The final grade has a mean of 10.4 and a median of 11 (standard deviation 4.6). Apart from the spike at zero, the grades are roughly bell-shaped between 4 and 20; without the zeros the mean is 11.5 and the standard deviation 3.2. **265 students pass (67.1%) and 130 fail (32.9%)**; the 38 zero grades make up 29% of all fails.
+
+Frequency tables for three categorical variables show how uneven some groups are: 208 female and 187 male students; 375 students want to continue to higher education and only 20 do not; 51 receive extra school support and 344 do not. Most students (312) have never failed a class; 50 have failed once, 17 twice and 16 three or more times.
+
+Grades fall steadily with previous failures: the mean is 11.3 with none, 8.1 with one, 6.2 with two and 5.7 with three or more (Figure 1, right). Students who go out very often (levels 4 and 5) average 9.7 and 9.0, against about 11 at levels 2 and 3.
+
+# 3. Relationships between variables
+
+**Correlations.** Among the numerical and ordered variables, previous failures has the strongest correlation with G3 (r = -0.36). The others are weak: mother's education 0.22, age -0.16, father's education 0.15, going out -0.13, study time 0.10. Because most of these are ordered categories, the values are rough guides only. Mother's and father's education overlap (r = 0.62), as do weekday and weekend alcohol use (0.65), so only one of each pair is worth carrying forward. Absences shows almost no correlation with G3 (0.03), but that figure is distorted by the zero grades, all of which have zero absences; among students with a grade above zero the correlation is -0.21.
+
+```{r ct}
+mk <- function(v, labs) { t <- table(s$pass, s[[v]]); p <- round(prop.table(t, 2) * 100, 1); data.frame(Group = labs, n = as.vector(colSums(t)), `Fail (%)` = as.vector(p["Fail", ]), `Pass (%)` = as.vector(p["Pass", ]), check.names = FALSE) }
+ct <- rbind(mk("failures", c("Previous failures: 0", "Previous failures: 1", "Previous failures: 2", "Previous failures: 3 or more")),
+            mk("higher", c("Wants higher education: no", "Wants higher education: yes")),
+            mk("schoolsup", c("School support: no", "School support: yes")),
+            mk("sex", c("Female", "Male")))
+kable(ct, booktabs = TRUE, align = "lrrr", caption = "Pass and fail as conditional percentages within each group")
+```
+
+Three quarters of students with no previous failure pass; with one failure the split is about even, and with two or more only around one in five pass. Students who do not plan higher education fail far more often (65% against 31%), but there are only 20 of them. Students receiving school support fail more often (45% against 31%). Male students pass slightly more often than female students (71% against 64%).
+
+```{r figs34, fig.cap="Left: final grade by how often the student goes out. Right: pass rate by previous class failures.", fig.show="hold", out.width="49%"}
+include_graphics(c("figures/fig3_g3_by_goout.png", "figures/fig4_pass_by_failures.png"))
+```
+
+**Carried forward to modelling:** previous failures (strongest signal), mother's education, going out, study time (weak, but the one behaviour a school can encourage directly), sex, intention to continue to higher education, and school support.
+
+# 4. Statistical models
+
+```{r lin}
+lt <- tidy(linear_model, conf.int = TRUE) %>% mutate(term = lab[term], p.value = pv(p.value)) %>%
+  select(Term = term, Estimate = estimate, `Std. error` = std.error, `95% CI low` = conf.low, `95% CI high` = conf.high, `p value` = p.value)
+kable(lt, digits = 2, booktabs = TRUE, align = "lrrrrr", caption = "Multiple linear regression (outcome: final grade G3). R-squared = 0.187, adjusted R-squared = 0.172, residual standard error = 4.17.")
+```
+
+**Linear model (final grade).** Holding the other predictors constant:
+
+- **Previous failures.** Each additional failure goes with a final grade 1.77 points lower.
+- **Mother's education.** Each higher level goes with a grade 0.52 points higher.
+- **Going out.** Each step up the five-point scale goes with a grade 0.46 points lower, so the two ends of the scale differ by about 1.8 points.
+- **Sex.** The reference category is female; male students score 1.26 points higher on average.
+- **Study time, higher education and school support** point in the expected directions, but their confidence intervals include zero.
+
+R-squared is 0.19: the seven characteristics explain under a fifth of the variation in final grades, so most of the difference between students lies in things this model does not contain.
+
+```{r logit}
+ot <- tidy(logistic_model, conf.int = TRUE, exponentiate = TRUE) %>% filter(term != "(Intercept)") %>% mutate(term = lab[term], p.value = pv(p.value)) %>%
+  select(Term = term, `Odds ratio` = estimate, `95% CI low` = conf.low, `95% CI high` = conf.high, `p value` = p.value)
+kable(ot, digits = 2, booktabs = TRUE, align = "lrrrr", caption = "Logistic regression (outcome: pass). Odds ratios above 1 mean higher odds of passing.")
+```
+
+**Logistic model (passing).** An odds ratio compares the odds of passing, holding the other predictors constant. Each previous failure multiplies the odds of passing by 0.41, that is, it cuts them by more than half. Each step up in going out multiplies them by 0.70. Male students have odds 1.69 times those of female students. An odds ratio is not a change in probability, so I also calculated predicted probabilities for a reference student (female, no failures, mother's education 3, going out 3, study time 2, wants higher education, no school support): **73%** chance of passing. Changing one thing at a time gives 53% with one previous failure, 32% with two, and 58% if she goes out very often.
+
+**What each model adds.** The linear model describes how many grade points go with each characteristic. The logistic model addresses the decision-relevant question, the chance of ending below the pass mark, and it does not treat the gap between 9 and 10 as just another point. The two agree on the main pattern (failures, going out, sex) and differ on mother's education, which is related to the grade but not clearly to passing (odds ratio 1.09).
+
+# 5. Model evaluation and uncertainty
+
+```{r figs56, fig.cap="Left: residuals against fitted values for the linear model, with the zero grades highlighted. Right: odds ratios from the logistic model with 95 percent confidence intervals.", fig.show="hold", out.width="49%"}
+include_graphics(c("figures/fig5_residuals_vs_fitted.png", "figures/fig6_odds_ratios.png"))
+```
+
+**Residuals.** The plot shows a clear warning sign: the 38 zero grades form a separate downward-sloping band, with residuals averaging about -8.9. The model predicts ordinary grades for these students, because nothing in their characteristics distinguishes them. The residuals are therefore not symmetric around zero, and the standard errors of the linear model should be treated as approximate.
+
+```{r sens}
+sn <- full_join(tidy(linear_model) %>% select(term, a = estimate, pa = p.value), tidy(linear_no_zero) %>% select(term, b = estimate, pb = p.value), by = "term") %>%
+  filter(term != "(Intercept)") %>% mutate(term = lab[term], pa = pv(pa), pb = pv(pb))
+names(sn) <- c("Term", "All 395 students", "p value", "357 students with G3 > 0", "p value ")
+kable(sn, digits = 2, booktabs = TRUE, align = "lrrrr", caption = "Sensitivity check: linear model coefficients with and without the zero grades")
+```
+
+**Sensitivity to the zero grades.** Refitting without the zeros (Table 5) leaves the direction of every coefficient unchanged, and failures, mother's education, going out and sex remain clearly different from zero. Three results do change: the failures coefficient shrinks from -1.77 to -1.04; study time becomes distinguishable from zero (0.45); and school support becomes clearly negative (-1.96). The typical prediction error falls from 4.2 to 2.9 points. Conclusions about study time and school support therefore depend on how the zero grades are treated, while the others do not.
+
+**Uncertainty, linear model.** Previous failures: -1.77, 95% CI -2.37 to -1.16 (t = -5.8); the data rule out a zero association. Mother's education: 0.52, CI 0.13 to 0.92 (p = 0.010); the direction is fairly secure, but the true size could be anywhere from negligible to almost a full point per level.
+
+**Uncertainty, logistic model.** Previous failures: odds ratio 0.41, CI 0.28 to 0.58, well below 1. Sex: odds ratio 1.69, CI 1.03 to 2.81 (p = 0.041); the interval only just excludes 1, so this is weak evidence. Wanting higher education has a large estimate (2.37) and a very wide interval (0.78 to 7.49), because only 20 students say no.
+
+**Significance and practical importance.** A difference of 1.8 grade points per failure, or a fall from 73% to 53% in the chance of passing, matters on a 20-point scale with a pass mark of 10. Mother's education is statistically significant but small: half a point per level. The logistic model classifies 71% of students correctly, barely above the 67% obtained by predicting "pass" for everyone, and it identifies only 38 of the 130 students who fail. It describes group patterns; it is not a tool for picking out individuals.
+
+**Other cautions.** The numerical predictors overlap only weakly (largest correlation -0.24, between failures and mother's education), so multicollinearity is not a concern. Treating ordered categories as numbers assumes equal steps. The predictors were chosen after looking at the same data, which flatters the fit, and no separate test sample was used.
+
+# 6. Causality, limitations and conclusions
+
+**Observational data.** Students were not assigned to study more, go out less or receive support; these were recorded as they were. The coefficients describe differences between groups of students and not the effect of changing a student's behaviour. School support illustrates the danger: supported students do worse, but support is given to students who were already struggling (their first-period average was 9.1 against 11.2), so the association runs from difficulty to support and not the other way.
+
+**Confounding and measurement.** Prior attainment, motivation, teaching quality, health, and family income are missing or only partly captured. Most variables are self-reported in a questionnaire; alcohol use, going out and study time may be under- or over-stated. Previous failures stands in for earlier attainment generally, so its coefficient is not the effect of the failure itself.
+
+**Generalisation.** Two schools in one region of Portugal, one subject, one cohort from the mid-2000s. Grading rules, the meaning of a "failure" and social patterns differ between schools, countries and systems, so the numbers should not be transferred without checking.
+
+**Supported by the analysis.** Students with previous class failures finished with clearly lower grades and passed much less often; students who go out very often and female students did slightly worse on average in this subject; students with more educated mothers did slightly better. The measured characteristics explain only a small part of the variation.
+
+**Beyond the evidence.** That reducing going out, or adding study time, would raise a student's grade; that school support harms performance; that the model can identify which individual students will fail; and that the same patterns hold in other schools or countries.
