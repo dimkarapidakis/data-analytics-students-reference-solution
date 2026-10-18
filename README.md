@@ -18,7 +18,3 @@ Final project, Data Analytics and Statistics, Scenario 2.
 ## Note on the analysis
 
 38 students have a final grade of exactly zero and no recorded absences. The report treats this as a data-quality issue, keeps them in the main analysis as the brief defines it, and shows which conclusions change without them.
-
-## Running
-
-Open the `.R` file in RStudio or Posit Cloud, set the working directory to this folder, and run it. Uses the `tidyverse` and `broom` packages. To rebuild the report, knit the `.Rmd` file.
